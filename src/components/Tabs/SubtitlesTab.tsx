@@ -6,14 +6,27 @@ import {
   Trash2, 
   Clock, 
   Check, 
+  CheckCheck,
   RefreshCw, 
   Mic, 
   Volume2, 
   Globe, 
-  BookOpen 
+  BookOpen,
+  Zap,
+  Maximize2,
+  AlertCircle,
+  Link2,
+  CheckCircle2
 } from 'lucide-react';
 import { SubtitleSettings, SubtitleStyle, SubtitleItem, SubtitleLanguage } from '../../types';
 import { transcribeVideoSpeech } from '../../utils/audioTranscriber';
+import { 
+  calculateSubtitleCoverage, 
+  completeRemainingVideoSubtitles, 
+  ensureFullDurationCoverage, 
+  stretchCuesToFullVideo, 
+  snapCuesContinuity 
+} from '../../utils/subtitleUtils';
 
 interface SubtitlesTabProps {
   subtitles: SubtitleSettings;
@@ -46,9 +59,12 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
 }) => {
   const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isCompletingRemaining, setIsCompletingRemaining] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const selectedLanguage: SubtitleLanguage = subtitles.language || 'bilingual';
+  const effectiveDuration = Math.max(3, videoDuration || 12);
+  const coverage = calculateSubtitleCoverage(subtitles.items, effectiveDuration);
 
   const handleLanguageChange = (lang: SubtitleLanguage) => {
     onChange({ 
@@ -58,34 +74,35 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
     });
   };
 
-  // 1. Core Feature: Automatic Speech-to-Subtitles from Speaker's Voice
+  // 1. Core Feature: Automatic Speech-to-Subtitles from Speaker's Voice covering the entire video
   const handleAutoTranscribeSpeakerVoice = async () => {
     try {
       setIsTranscribingVoice(true);
-      setStatusMessage('Extracting audio track from video & transcribing speaker voice...');
+      setStatusMessage('Extracting audio track from video & transcribing speaker voice across full video...');
 
-      const items = await transcribeVideoSpeech({
+      const rawItems = await transcribeVideoSpeech({
         source: videoElement || null,
         language: selectedLanguage,
-        duration: videoDuration || 15,
+        duration: effectiveDuration,
         title: videoTitle || 'Mohammadi Academy Lecture',
       });
 
-      if (items && items.length > 0) {
+      const fullItems = ensureFullDurationCoverage(rawItems, effectiveDuration, selectedLanguage, videoTitle);
+
+      if (fullItems && fullItems.length > 0) {
         onChange({
           enabled: true,
           language: selectedLanguage,
           style: subtitles.style || 'academic-gold',
           fontFamily: selectedLanguage === 'en' ? 'Outfit' : 'Vazirmatn',
-          items,
+          items: fullItems,
         });
-        setStatusMessage(`Transcribed ${items.length} synchronized speech cues in ${selectedLanguage.toUpperCase()}!`);
+        setStatusMessage(`✨ Transcribed & applied ${fullItems.length} cues across 100% of video duration!`);
       } else {
         setStatusMessage('No speech cues generated.');
       }
     } catch (err: any) {
-      console.error('Speech transcription failed, falling back to script generation:', err);
-      // Graceful fallback to text-based AI generator
+      console.error('Speech transcription failed, falling back to script generator:', err);
       handleFallbackTextGenerator();
     } finally {
       setIsTranscribingVoice(false);
@@ -96,24 +113,25 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
   // Fallback AI generator if direct audio stream is silent
   const handleFallbackTextGenerator = async () => {
     try {
-      setStatusMessage('Generating synchronized subtitles via AI...');
+      setStatusMessage('Generating synchronized subtitles for full video via AI...');
       const res = await fetch('/api/ai/subtitles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: videoTitle || 'Mohammadi Academy Official Lecture',
-          duration: videoDuration || 15,
+          duration: effectiveDuration,
           language: selectedLanguage,
         }),
       });
       const data = await res.json();
       if (data.subtitles && Array.isArray(data.subtitles)) {
+        const fullItems = ensureFullDurationCoverage(data.subtitles, effectiveDuration, selectedLanguage, videoTitle);
         onChange({
           enabled: true,
           language: selectedLanguage,
-          items: data.subtitles,
+          items: fullItems,
         });
-        setStatusMessage(`Generated ${data.subtitles.length} subtitle cues!`);
+        setStatusMessage(`✨ Generated ${fullItems.length} subtitle cues covering 100% of video!`);
       }
     } catch (fallbackErr) {
       console.error('Fallback subtitle generation failed:', fallbackErr);
@@ -152,6 +170,65 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
     }
   };
 
+  // 3. User Feature Request: "Apply all subtitles for remaining part of the video"
+  const handleApplyToRemaining = async () => {
+    try {
+      setIsCompletingRemaining(true);
+      setStatusMessage(`⚡ Generating & applying subtitles for remaining ${coverage.remainingSeconds}s...`);
+
+      const completedItems = await completeRemainingVideoSubtitles({
+        existingItems: subtitles.items,
+        totalDuration: effectiveDuration,
+        language: selectedLanguage,
+        title: videoTitle || 'Mohammadi Academy Lecture',
+      });
+
+      onChange({
+        enabled: true,
+        items: completedItems,
+      });
+      setStatusMessage(`✨ Subtitles successfully applied for all remaining parts up to ${effectiveDuration.toFixed(1)}s!`);
+    } catch (err) {
+      console.error('Failed to complete remaining subtitles:', err);
+      setStatusMessage('Failed to complete remaining subtitles.');
+    } finally {
+      setIsCompletingRemaining(false);
+      setTimeout(() => setStatusMessage(null), 4000);
+    }
+  };
+
+  // 4. Stretch existing cues proportionally to span 100% of video
+  const handleStretchToFull = () => {
+    if (subtitles.items.length === 0) return;
+    const stretched = stretchCuesToFullVideo(subtitles.items, effectiveDuration);
+    onChange({
+      enabled: true,
+      items: stretched,
+    });
+    setStatusMessage(`📐 Stretched ${stretched.length} cues proportionally to cover full video (0:00 → ${effectiveDuration.toFixed(1)}s)!`);
+    setTimeout(() => setStatusMessage(null), 3500);
+  };
+
+  // 5. Explicit "Apply All to Full Video" validation
+  const handleApplyAllToFullVideo = () => {
+    const fullItems = ensureFullDurationCoverage(subtitles.items, effectiveDuration, selectedLanguage, videoTitle);
+    onChange({
+      enabled: true,
+      items: fullItems,
+    });
+    setStatusMessage(`✓ All subtitles applied and verified across 100% of the video duration!`);
+    setTimeout(() => setStatusMessage(null), 3500);
+  };
+
+  // 6. Snap timing continuity
+  const handleSnapGaps = () => {
+    if (subtitles.items.length === 0) return;
+    const snapped = snapCuesContinuity(subtitles.items);
+    onChange({ items: snapped });
+    setStatusMessage(`🔗 Snapped cue timing for seamless, gap-free subtitle transitions.`);
+    setTimeout(() => setStatusMessage(null), 3000);
+  };
+
   const handleUpdateItem = (id: string, field: keyof SubtitleItem, value: any) => {
     const updated = subtitles.items.map((item) =>
       item.id === id ? { ...item, [field]: value } : item
@@ -165,15 +242,16 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
 
   const handleAddItem = () => {
     const lastItem = subtitles.items[subtitles.items.length - 1];
-    const newStart = lastItem ? Number((lastItem.end + 0.2).toFixed(1)) : 0;
-    const newEnd = Number((newStart + 2.4).toFixed(1));
+    const newStart = lastItem ? Number((lastItem.end + 0.1).toFixed(1)) : 0;
+    const maxEnd = effectiveDuration;
+    const newEnd = Number(Math.min(maxEnd, newStart + 2.8).toFixed(1));
     const newItem: SubtitleItem = {
       id: Date.now().toString(),
       start: newStart,
       end: newEnd,
-      text: selectedLanguage === 'en' ? 'New lecture subtitle phrase' : 'فراز جدید از درس‌گفتار',
-      translation: selectedLanguage === 'bilingual' ? 'New lecture phrase translation' : undefined,
-      highlight: selectedLanguage === 'en' ? 'lecture' : 'درس‌گفتار',
+      text: selectedLanguage === 'en' ? 'New lecture subtitle phrase' : 'فراز جدید از مباحث آکادمی محمدی',
+      translation: selectedLanguage === 'bilingual' ? 'New lecture subtitle translation' : undefined,
+      highlight: selectedLanguage === 'en' ? 'Mohammadi' : 'محمدی',
     };
     onChange({ items: [...subtitles.items, newItem] });
   };
@@ -309,6 +387,119 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
             </div>
           </div>
 
+          {/* Full Video Subtitle Coverage & Apply Master Controls */}
+          <div className="bg-gradient-to-br from-neutral-900 via-neutral-900 to-neutral-950 p-4 rounded-xl border border-neutral-800 space-y-3.5 shadow-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-400" />
+                <span className="text-xs font-bold text-white tracking-wide">Video Subtitle Coverage</span>
+              </div>
+
+              {coverage.isFullCoverage ? (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 px-2.5 py-1 rounded-full shadow-sm">
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>100% Full Video Covered</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-300 bg-amber-950/80 border border-amber-500/40 px-2.5 py-1 rounded-full shadow-sm">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                  <span>{coverage.percent}% Covered ({coverage.remainingSeconds}s remaining)</span>
+                </span>
+              )}
+            </div>
+
+            {/* Visual Timeline Coverage Track */}
+            <div className="space-y-1.5 bg-neutral-950/70 p-2.5 rounded-lg border border-neutral-800/80">
+              <div className="w-full bg-neutral-900 h-2.5 rounded-full overflow-hidden flex border border-neutral-800">
+                <div 
+                  className={`h-full transition-all duration-300 ${
+                    coverage.isFullCoverage 
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400' 
+                      : 'bg-gradient-to-r from-amber-500 via-yellow-500 to-amber-400'
+                  }`}
+                  style={{ width: `${coverage.percent}%` }}
+                />
+                {!coverage.isFullCoverage && (
+                  <div 
+                    className="h-full bg-neutral-800/90"
+                    style={{ width: `${100 - coverage.percent}%` }}
+                  />
+                )}
+              </div>
+              <div className="flex items-center justify-between text-[10px] text-neutral-400 font-mono">
+                <span>0.0s</span>
+                <span className={coverage.isFullCoverage ? 'text-emerald-300 font-semibold' : 'text-amber-300 font-semibold'}>
+                  Current Cues: {coverage.coveredEnd.toFixed(1)}s
+                </span>
+                <span>End: {effectiveDuration.toFixed(1)}s</span>
+              </div>
+            </div>
+
+            {/* Quick Action Buttons for Coverage */}
+            <div className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Apply Subtitles for Remaining Video Button */}
+                <button
+                  type="button"
+                  onClick={handleApplyToRemaining}
+                  disabled={isCompletingRemaining || coverage.isFullCoverage}
+                  className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-500 hover:brightness-110 text-neutral-950 font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md shadow-amber-500/20 active:scale-98 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  title="Generate and apply subtitles for the remaining duration of the video"
+                >
+                  {isCompletingRemaining ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Generating Remaining Cues...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 fill-current" />
+                      <span>Apply to Remaining ({coverage.remainingSeconds}s)</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Apply All to Full Video */}
+                <button
+                  type="button"
+                  onClick={handleApplyAllToFullVideo}
+                  disabled={subtitles.items.length === 0}
+                  className="py-2.5 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-750 text-neutral-100 hover:text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-all border border-neutral-700 active:scale-98 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  title="Apply all subtitle cues and guarantee 100% full video duration coverage"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Apply All to Full Video</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {/* Stretch Cues to Full Video */}
+                <button
+                  type="button"
+                  onClick={handleStretchToFull}
+                  disabled={subtitles.items.length === 0 || coverage.isFullCoverage}
+                  className="py-2 px-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 text-neutral-300 hover:text-amber-300 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-all border border-neutral-800 active:scale-98 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  title="Proportionally stretch existing cues across the entire video duration"
+                >
+                  <Maximize2 className="w-3 h-3 text-amber-400" />
+                  <span>Stretch to Full Video</span>
+                </button>
+
+                {/* Snap Continuity Gaps */}
+                <button
+                  type="button"
+                  onClick={handleSnapGaps}
+                  disabled={subtitles.items.length < 2}
+                  className="py-2 px-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 text-neutral-300 hover:text-amber-300 font-medium text-[11px] flex items-center justify-center gap-1.5 transition-all border border-neutral-800 active:scale-98 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  title="Remove gaps between cues for smooth uninterrupted subtitles"
+                >
+                  <Link2 className="w-3 h-3 text-amber-400" />
+                  <span>Seamless Flow (Snap Gaps)</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Subtitle Visual Styles */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2">
@@ -377,18 +568,39 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
           </div>
 
           {/* Interactive Timed Subtitles List */}
-          <div className="space-y-2">
+          <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400">
-                Timeline Subtitle Cues ({subtitles.items.length})
-              </label>
-              <button
-                type="button"
-                onClick={handleAddItem}
-                className="text-[11px] font-semibold text-amber-400 hover:text-amber-300 flex items-center gap-1 cursor-pointer"
-              >
-                <Plus className="w-3 h-3" /> Add Cue
-              </button>
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-300 block">
+                  Timeline Subtitle Cues ({subtitles.items.length})
+                </label>
+                <span className="text-[10px] text-neutral-400 font-mono">
+                  {coverage.isFullCoverage
+                    ? `✓ Spans full video: 0.0s → ${effectiveDuration.toFixed(1)}s`
+                    : `⚠️ Cues end at ${coverage.coveredEnd.toFixed(1)}s (${coverage.remainingSeconds}s remaining)`}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                {!coverage.isFullCoverage && (
+                  <button
+                    type="button"
+                    onClick={handleApplyToRemaining}
+                    disabled={isCompletingRemaining}
+                    className="text-[11px] font-bold text-amber-300 hover:text-amber-200 bg-amber-950/70 border border-amber-500/40 px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer transition-all active:scale-95 shadow-sm"
+                    title="Fill remaining duration of video"
+                  >
+                    <Zap className="w-3 h-3 fill-current text-amber-400" />
+                    <span>Fill Rest ({coverage.remainingSeconds}s)</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleAddItem}
+                  className="text-[11px] font-semibold text-neutral-200 hover:text-white bg-neutral-800 hover:bg-neutral-700 px-2.5 py-1 rounded-lg flex items-center gap-1 cursor-pointer transition-all border border-neutral-700"
+                >
+                  <Plus className="w-3 h-3" /> Add Cue
+                </button>
+              </div>
             </div>
 
             <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
@@ -475,7 +687,42 @@ export const SubtitlesTab: React.FC<SubtitlesTabProps> = ({
                   </div>
                 );
               })}
+
+              {/* Bottom Reminder when Remaining Video duration has no subtitles */}
+              {!coverage.isFullCoverage && (
+                <div className="p-3 bg-amber-950/40 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2 text-amber-200">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      Remaining <strong>{coverage.remainingSeconds}s</strong> of video ({coverage.coveredEnd.toFixed(1)}s → {effectiveDuration.toFixed(1)}s) has no subtitles.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleApplyToRemaining}
+                    disabled={isCompletingRemaining}
+                    className="shrink-0 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-500 hover:brightness-110 text-neutral-950 font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-40 active:scale-95 transition-all"
+                  >
+                    {isCompletingRemaining ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Zap className="w-3 h-3 fill-current" />
+                    )}
+                    <span>Apply to Remaining</span>
+                  </button>
+                </div>
+              )}
             </div>
+
+            {/* Master Apply Subtitles to Video Button */}
+            <button
+              type="button"
+              onClick={handleApplyAllToFullVideo}
+              className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:brightness-110 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 active:scale-98 transition-all cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Apply All Subtitles to Full Video ({effectiveDuration.toFixed(1)}s)</span>
+            </button>
           </div>
         </>
       )}

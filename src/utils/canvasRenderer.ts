@@ -495,9 +495,19 @@ function drawSubtitles(
   currentTime: number
 ) {
   const { subtitles } = state;
-  const currentItem = subtitles.items.find(
+  // Find active subtitle cue with micro-gap bridge (0.2s) so subtitles stay smooth throughout the video
+  let currentItem = subtitles.items.find(
     (item) => currentTime >= item.start && currentTime <= item.end
   );
+
+  if (!currentItem && subtitles.items.length > 0) {
+    const bridgeItem = subtitles.items.find(
+      (item) => currentTime >= item.end && currentTime <= item.end + 0.2
+    );
+    if (bridgeItem) {
+      currentItem = bridgeItem;
+    }
+  }
 
   if (!currentItem) return;
 

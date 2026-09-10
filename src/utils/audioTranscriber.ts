@@ -1,4 +1,5 @@
 import { SubtitleItem, SubtitleLanguage } from '../types';
+import { ensureFullDurationCoverage } from './subtitleUtils';
 
 /**
  * Extracts a compact mono 16kHz WAV audio segment from a video File or HTMLVideoElement
@@ -6,7 +7,7 @@ import { SubtitleItem, SubtitleLanguage } from '../types';
  */
 export async function extractVideoAudioBuffer(
   source: File | HTMLVideoElement,
-  maxSeconds = 60
+  maxSeconds = 300
 ): Promise<{ base64Audio: string; duration: number } | null> {
   try {
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -137,7 +138,7 @@ export async function transcribeVideoSpeech({
   let audioBase64: string | undefined;
 
   if (source) {
-    const audioData = await extractVideoAudioBuffer(source, Math.min(60, duration || 30));
+    const audioData = await extractVideoAudioBuffer(source, Math.min(300, Math.max(10, duration || 30)));
     if (audioData) {
       audioBase64 = audioData.base64Audio;
     }
@@ -156,8 +157,9 @@ export async function transcribeVideoSpeech({
   });
 
   const data = await response.json();
-  if (data.subtitles && Array.isArray(data.subtitles)) {
-    return data.subtitles;
+  if (data.subtitles && Array.isArray(data.subtitles) && data.subtitles.length > 0) {
+    // Ensure that the returned subtitles cover the full duration of the video
+    return ensureFullDurationCoverage(data.subtitles, duration, language, title);
   }
 
   throw new Error(data.error || 'Failed to transcribe video speech');

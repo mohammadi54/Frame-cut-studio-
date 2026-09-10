@@ -129,8 +129,9 @@ app.post("/api/ai/subtitles", async (req, res) => {
   try {
     const { title, duration, transcriptDraft, language } = req.body;
     const ai = getAI();
-    const vidDuration = Math.max(3, Math.min(180, Number(duration) || 12));
+    const vidDuration = Math.max(3, Number(duration) || 15);
     const lang = language || 'fa';
+    const estimatedCues = Math.max(3, Math.ceil(vidDuration / 3.2));
 
     let languageInstructions = "";
     if (lang === 'fa') {
@@ -156,12 +157,19 @@ ${transcriptDraft ? `User's transcript / spoken notes: "${transcriptDraft}"` : "
 Language requirement:
 ${languageInstructions}
 
+CRITICAL REQUIREMENT - FULL DURATION COVERAGE:
+- You MUST generate subtitles that span across the ENTIRE video duration, from 0.0 seconds all the way to ${vidDuration.toFixed(1)} seconds!
+- Generate approximately ${estimatedCues} consecutive cues.
+- The first cue MUST start at 0.0s.
+- The final cue MUST end between ${(vidDuration - 0.5).toFixed(1)}s and ${vidDuration.toFixed(1)}s.
+- Do NOT stop after only 10, 15, or 20 seconds. Ensure every part of the video has active subtitle cues without large dead gaps.
+
 Output strictly valid JSON with an array of subtitle objects:
 [
   {
     "id": "1",
     "start": 0.0,
-    "end": 2.5,
+    "end": 3.0,
     "text": "...",
     ${lang === 'bilingual' ? '"translation": "...",' : ''}
     "highlight": "..."
@@ -169,8 +177,7 @@ Output strictly valid JSON with an array of subtitle objects:
 ]
 Rules:
 - Keep phrases concise (3 to 6 words per line).
-- Subtitle intervals must fit logically within [0.0, ${vidDuration}].
-- Timestamp gaps must be small and natural for continuous speech pacing.`;
+- Cues must be contiguous with natural pacing (each cue approx 2.5 to 3.8 seconds).`;
 
     const response = await ai.models.generateContent({
       model: "gemini-3.8-flash",
@@ -184,59 +191,59 @@ Rules:
     res.json({ subtitles: parsed });
   } catch (error: any) {
     console.error("AI Subtitles error:", error);
-    const vidDuration = Math.max(5, Number(req.body.duration) || 10);
-    const step = vidDuration / 4;
-    const isFa = req.body.language === 'fa' || req.body.language === 'bilingual';
+    const vidDuration = Math.max(3, Number(req.body.duration) || 15);
+    const lang = req.body.language || 'fa';
+    const isFa = lang === 'fa' || lang === 'bilingual';
+    const cueCount = Math.max(3, Math.ceil(vidDuration / 3.5));
+    const step = vidDuration / cueCount;
 
-    if (isFa) {
-      res.json({
-        subtitles: [
-          { 
-            id: "1", 
-            start: 0, 
-            end: Number((step * 0.9).toFixed(1)), 
-            text: "به آکادمی محمدی خوش آمدید", 
-            translation: "Welcome to Mohammadi Academy",
-            highlight: "محمدی" 
-          },
-          { 
-            id: "2", 
-            start: Number(step.toFixed(1)), 
-            end: Number((step * 1.9).toFixed(1)), 
-            text: "مرکز تخصصی آموزش و پژوهش‌های علمی", 
-            translation: "Center for Specialized Research & Education",
-            highlight: "پژوهش‌های" 
-          },
-          { 
-            id: "3", 
-            start: Number((step * 2).toFixed(1)), 
-            end: Number((step * 2.9).toFixed(1)), 
-            text: "یادگیری حکمت، اخلاق و معارف راستین", 
-            translation: "Learning Wisdom, Ethics & Knowledge",
-            highlight: "حکمت" 
-          },
-          { 
-            id: "4", 
-            start: Number((step * 3).toFixed(1)), 
-            end: Number((vidDuration - 0.2).toFixed(1)), 
-            text: "پایگاه رسمی ما: Mohammadiacademy.org", 
-            translation: "Official Portal: Mohammadiacademy.org",
-            highlight: "Mohammadiacademy.org" 
-          },
-        ],
-        fallback: true,
-      });
-    } else {
-      res.json({
-        subtitles: [
-          { id: "1", start: 0, end: Number((step * 0.9).toFixed(1)), text: "Welcome to Mohammadi Academy", highlight: "Academy" },
-          { id: "2", start: Number(step.toFixed(1)), end: Number((step * 1.9).toFixed(1)), text: "Dedicated to academic excellence & wisdom", highlight: "wisdom" },
-          { id: "3", start: Number((step * 2).toFixed(1)), end: Number((step * 2.9).toFixed(1)), text: "Explore in-depth lectures and courses", highlight: "lectures" },
-          { id: "4", start: Number((step * 3).toFixed(1)), end: Number((vidDuration - 0.2).toFixed(1)), text: "Visit us at Mohammadiacademy.org", highlight: "Mohammadiacademy.org" },
-        ],
-        fallback: true,
-      });
+    const phrasesFa = [
+      { text: "به آکادمی محمدی خوش آمدید", trans: "Welcome to Mohammadi Academy", hi: "محمدی" },
+      { text: "مرکز تخصصی آموزش و پژوهش‌های علمی", trans: "Center for Specialized Research & Education", hi: "پژوهش‌های" },
+      { text: "یادگیری حکمت، اخلاق و معارف راستین", trans: "Learning Wisdom, Ethics & Knowledge", hi: "حکمت" },
+      { text: "بررسی عمیق پرسش‌های فکری و معنوی", trans: "In-depth Study of Philosophical & Spiritual Questions", hi: "معنوی" },
+      { text: "گسترش بینش عقلانی در جامعه معاصر", trans: "Expanding Rational Insight in Modern Society", hi: "عقلانی" },
+      { text: "دریافت مقالات تکمیلی و درس‌گفتارها", trans: "Access Supplementary Articles & Lectures", hi: "درس‌گفتارها" },
+      { text: "پایگاه رسمی ما: Mohammadiacademy.org", trans: "Official Portal: Mohammadiacademy.org", hi: "Mohammadiacademy.org" },
+    ];
+
+    const phrasesEn = [
+      { text: "Welcome to Mohammadi Academy", hi: "Academy" },
+      { text: "Dedicated to academic excellence & wisdom", hi: "wisdom" },
+      { text: "Explore in-depth lectures and courses", hi: "lectures" },
+      { text: "Advancing scholarly research & critical thought", hi: "research" },
+      { text: "Connecting tradition with contemporary inquiry", hi: "inquiry" },
+      { text: "Discover our full series of academic studies", hi: "studies" },
+      { text: "Visit us at Mohammadiacademy.org", hi: "Mohammadiacademy.org" },
+    ];
+
+    const subtitles = [];
+    for (let i = 0; i < cueCount; i++) {
+      const start = Number((i * step).toFixed(1));
+      const end = i === cueCount - 1 ? Number(vidDuration.toFixed(1)) : Number(((i + 1) * step).toFixed(1));
+      if (isFa) {
+        const p = phrasesFa[i % phrasesFa.length];
+        subtitles.push({
+          id: String(i + 1),
+          start,
+          end,
+          text: p.text,
+          translation: lang === 'bilingual' ? p.trans : undefined,
+          highlight: p.hi,
+        });
+      } else {
+        const p = phrasesEn[i % phrasesEn.length];
+        subtitles.push({
+          id: String(i + 1),
+          start,
+          end,
+          text: p.text,
+          highlight: p.hi,
+        });
+      }
     }
+
+    res.json({ subtitles, fallback: true });
   }
 });
 
@@ -245,8 +252,9 @@ app.post("/api/ai/transcribe-video-audio", async (req, res) => {
   try {
     const { audioBase64, mimeType, language, duration, title } = req.body;
     const ai = getAI();
-    const vidDuration = Math.max(3, Math.min(180, Number(duration) || 15));
+    const vidDuration = Math.max(3, Number(duration) || 15);
     const lang = language || 'fa';
+    const estimatedCues = Math.max(3, Math.ceil(vidDuration / 3.2));
 
     let langInstruction = "";
     if (lang === 'fa') {
@@ -263,25 +271,26 @@ Provide "text" in English, timestamps [start, end], and a "highlight" keyword.`;
     }
 
     const systemPrompt = `You are an automated speech transcription engine for Mohammadi Academy (Mohammadiacademy.org).
-Your task is to listen to the speaker's voice in the provided video audio and output precisely timed subtitles synchronized with when the speaker speaks.
+Your task is to transcribe the speech across the FULL duration of the video and output precisely timed subtitles synchronized with the video.
 Video Title Context: "${title || "Mohammadi Academy Lecture"}"
-Max Duration: ${vidDuration} seconds.
+Total Video Duration: ${vidDuration} seconds.
 
 Language Requirement:
 ${langInstruction}
 
-Rules:
-1. Return strictly JSON with an array of subtitles.
-2. Group spoken words into clean, readable subtitle cues (3 to 6 words per cue).
-3. "start" and "end" must be numbers in seconds, reflecting when the speaker speaks.
-4. "id" must be sequential string ("1", "2", ...).
+CRITICAL DURATION RULE:
+1. Subtitles MUST cover the entire video timeline from 0.0 seconds all the way up to ${vidDuration.toFixed(1)} seconds!
+2. Do NOT stop after only the opening remarks. The cues must continue through the middle and all the way to ${vidDuration.toFixed(1)}s (expecting ~${estimatedCues} cues).
+3. If speech pauses or concludes before the video ends, provide closing/concluding academic subtitles for Mohammadi Academy so the entire video remains subtitled.
+4. "start" and "end" must be numbers in seconds.
+5. "id" must be sequential string ("1", "2", ...).
 
 JSON format:
 [
   {
     "id": "1",
     "start": 0.0,
-    "end": 2.4,
+    "end": 2.8,
     "text": "...",
     ${lang === 'bilingual' ? '"translation": "...",' : ''}
     "highlight": "..."
@@ -291,7 +300,6 @@ JSON format:
     let response;
 
     if (audioBase64 && audioBase64.length > 50) {
-      // Audio provided: pass to multimodal Gemini 2.5/3.8 Flash!
       const audioBufferClean = audioBase64.includes(",") ? audioBase64.split(",")[1] : audioBase64;
       response = await ai.models.generateContent({
         model: "gemini-3.8-flash",
@@ -311,10 +319,9 @@ JSON format:
         },
       });
     } else {
-      // Fallback text-based timed generator based on title and duration
       response = await ai.models.generateContent({
         model: "gemini-3.8-flash",
-        contents: systemPrompt + `\nNo direct audio waveform available; generate authentic Mohammadi Academy lecture speech cues matching duration ${vidDuration}s.`,
+        contents: systemPrompt + `\nNo direct audio waveform available; generate authentic Mohammadi Academy lecture speech cues continuously covering the entire ${vidDuration}s duration.`,
         config: {
           responseMimeType: "application/json",
         },
@@ -325,27 +332,113 @@ JSON format:
     res.json({ subtitles: parsed, success: true });
   } catch (error: any) {
     console.error("AI Audio Transcription error:", error);
-    const vidDuration = Math.max(5, Number(req.body.duration) || 12);
-    const step = vidDuration / 4;
-    const isFa = req.body.language === 'fa' || req.body.language === 'bilingual';
+    const vidDuration = Math.max(3, Number(req.body.duration) || 15);
+    const lang = req.body.language || 'fa';
+    const isFa = lang === 'fa' || lang === 'bilingual';
+    const cueCount = Math.max(3, Math.ceil(vidDuration / 3.5));
+    const step = vidDuration / cueCount;
+
+    const subtitles = [];
+    const poolFa = [
+      { text: "به آکادمی محمدی خوش آمدید", trans: "Welcome to Mohammadi Academy", hi: "محمدی" },
+      { text: "آموزش و پژوهش‌های تخصصی معارف اسلامی", trans: "Specialized Islamic Research & Studies", hi: "پژوهش‌های" },
+      { text: "راهی به‌سوی اندیشه، معرفت و اخلاق", trans: "A Path Toward Thought & Ethics", hi: "معرفت" },
+      { text: "بررسی ابعاد گوناگون حکمت و عقلانیت", trans: "Exploring Dimensions of Wisdom & Rationality", hi: "حکمت" },
+      { text: "آشنایی با مباحث بنیادی علوم انسانی", trans: "Foundational Themes in Human Sciences", hi: "علوم" },
+      { text: "مشاهده کامل دروس: Mohammadiacademy.org", trans: "Watch full lectures: Mohammadiacademy.org", hi: "Mohammadiacademy.org" },
+    ];
+
+    const poolEn = [
+      { text: "Welcome to Mohammadi Academy", hi: "Academy" },
+      { text: "Exploring profound wisdom and knowledge", hi: "wisdom" },
+      { text: "Guided lectures and scholarly studies", hi: "lectures" },
+      { text: "Advancing ethical reflection & critical inquiry", hi: "inquiry" },
+      { text: "Connecting global knowledge with timeless insight", hi: "insight" },
+      { text: "Official Portal: Mohammadiacademy.org", hi: "Mohammadiacademy.org" },
+    ];
+
+    for (let i = 0; i < cueCount; i++) {
+      const start = Number((i * step).toFixed(1));
+      const end = i === cueCount - 1 ? Number(vidDuration.toFixed(1)) : Number(((i + 1) * step).toFixed(1));
+      if (isFa) {
+        const item = poolFa[i % poolFa.length];
+        subtitles.push({
+          id: String(i + 1),
+          start,
+          end,
+          text: item.text,
+          translation: lang === 'bilingual' ? item.trans : undefined,
+          highlight: item.hi,
+        });
+      } else {
+        const item = poolEn[i % poolEn.length];
+        subtitles.push({
+          id: String(i + 1),
+          start,
+          end,
+          text: item.text,
+          highlight: item.hi,
+        });
+      }
+    }
 
     res.json({
-      subtitles: isFa
-        ? [
-            { id: "1", start: 0, end: Number((step * 0.9).toFixed(1)), text: "به آکادمی محمدی خوش آمدید", translation: "Welcome to Mohammadi Academy", highlight: "محمدی" },
-            { id: "2", start: Number(step.toFixed(1)), end: Number((step * 1.9).toFixed(1)), text: "آموزش و پژوهش‌های تخصصی معارف اسلامی", translation: "Specialized Islamic Research & Studies", highlight: "پژوهش‌های" },
-            { id: "3", start: Number((step * 2).toFixed(1)), end: Number((step * 2.9).toFixed(1)), text: "راهی به‌سوی اندیشه، معرفت و اخلاق", translation: "A Path Toward Thought & Ethics", highlight: "معرفت" },
-            { id: "4", start: Number((step * 3).toFixed(1)), end: Number((vidDuration - 0.2).toFixed(1)), text: "مشاهده کامل دروس: Mohammadiacademy.org", translation: "Watch full lectures: Mohammadiacademy.org", highlight: "Mohammadiacademy.org" },
-          ]
-        : [
-            { id: "1", start: 0, end: Number((step * 0.9).toFixed(1)), text: "Welcome to Mohammadi Academy", highlight: "Academy" },
-            { id: "2", start: Number(step.toFixed(1)), end: Number((step * 1.9).toFixed(1)), text: "Exploring profound wisdom and knowledge", highlight: "wisdom" },
-            { id: "3", start: Number((step * 2).toFixed(1)), end: Number((step * 2.9).toFixed(1)), text: "Guided lectures and scholarly studies", highlight: "lectures" },
-            { id: "4", start: Number((step * 3).toFixed(1)), end: Number((vidDuration - 0.2).toFixed(1)), text: "Official Portal: Mohammadiacademy.org", highlight: "Mohammadiacademy.org" },
-          ],
+      subtitles,
       fallback: true,
       error: error.message,
     });
+  }
+});
+
+// AI Subtitles Completion: Fills subtitles for the remaining part of the video
+app.post("/api/ai/complete-subtitles", async (req, res) => {
+  try {
+    const { startTime, endTime, language, title, existingSubtitles } = req.body;
+    const ai = getAI();
+    const start = Number(startTime) || 0;
+    const end = Math.max(start + 1, Number(endTime) || (start + 10));
+    const lang = language || 'fa';
+    const span = end - start;
+    const targetCount = Math.max(1, Math.ceil(span / 3.2));
+
+    const prompt = `You are a subtitle timing and completion engine for Mohammadi Academy (Mohammadiacademy.org).
+The user needs subtitle cues to fill the REMAINING portion of a video between ${start.toFixed(1)}s and ${end.toFixed(1)}s.
+Context:
+- Video Title: "${title || "Mohammadi Academy Lecture"}"
+- Previous subtitle cues ended at: ${start.toFixed(1)}s
+- Final video target time: ${end.toFixed(1)}s
+- Language: ${lang} (${lang === 'fa' ? 'Persian only' : lang === 'bilingual' ? 'Bilingual Persian + English translation' : 'English'})
+
+Requirements:
+1. Generate approximately ${targetCount} subtitle cues.
+2. The first new cue must start at ${start.toFixed(1)}s.
+3. The final cue must end at exactly ${end.toFixed(1)}s.
+4. Keep the theme cohesive with Mohammadi Academy's educational and scholarly mission.
+5. Return strictly a JSON array of subtitle items:
+[
+  {
+    "id": "fill-1",
+    "start": ${start.toFixed(1)},
+    "end": ${(start + (span / targetCount)).toFixed(1)},
+    "text": "...",
+    ${lang === 'bilingual' ? '"translation": "...",' : ''}
+    "highlight": "..."
+  }
+]`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      },
+    });
+
+    const parsed = JSON.parse(response.text || "[]");
+    res.json({ subtitles: parsed, success: true });
+  } catch (err: any) {
+    console.error("Complete subtitles error:", err);
+    res.status(500).json({ error: err.message || "Failed to complete subtitles" });
   }
 });
 

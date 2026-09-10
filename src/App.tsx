@@ -25,6 +25,7 @@ import { PLATFORMS } from './constants/platforms';
 import { applyProfessionalFrame } from './utils/proFraming';
 import { exportCompositeVideo, ExportProgress, ExportJob, capturePosterSnapshot, downloadBlob } from './utils/videoExporter';
 import { transcribeVideoSpeech } from './utils/audioTranscriber';
+import { ensureFullDurationCoverage } from './utils/subtitleUtils';
 
 import { Header } from './components/Header';
 import { VideoUploadZone } from './components/VideoUploadZone';
@@ -159,12 +160,14 @@ export default function App() {
       const title = video.name || projectState.title.text;
 
       // Listen to speech in the video audio track and transcribe
-      const items = await transcribeVideoSpeech({
+      const rawItems = await transcribeVideoSpeech({
         source: video.file || hiddenVideoRef.current,
         language,
         duration,
         title,
       });
+
+      const items = ensureFullDurationCoverage(rawItems, duration, language, title);
 
       if (items && items.length > 0) {
         setProjectState((prev) => ({
@@ -178,32 +181,40 @@ export default function App() {
             fontFamily: language === 'en' ? 'Outfit' : 'Vazirmatn',
           },
         }));
-        showToast('✨ Subtitles automatically synchronized and applied for this video!');
+        showToast('✨ Subtitles automatically applied for entire video (100% duration)!');
       }
     } catch (err) {
       console.warn('Auto-subtitle extraction error, ensuring baseline academic subtitles:', err);
       // Fallback AI subtitles if direct stream fails
       try {
+        const duration = video.duration || 10;
+        const language = projectState.subtitles.language || 'bilingual';
+        const title = video.name || projectState.title.text;
+
         const res = await fetch('/api/ai/subtitles', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            title: video.name || projectState.title.text,
-            duration: video.duration || 10,
-            language: projectState.subtitles.language || 'bilingual',
+            title,
+            duration,
+            language,
           }),
         });
         const data = await res.json();
         if (data.subtitles && Array.isArray(data.subtitles)) {
+          const fullItems = ensureFullDurationCoverage(data.subtitles, duration, language, title);
           setProjectState((prev) => ({
             ...prev,
             subtitles: {
               ...prev.subtitles,
               enabled: true,
-              items: data.subtitles,
+              items: fullItems,
+              language,
+              style: prev.subtitles.style || 'academic-gold',
+              fontFamily: language === 'en' ? 'Outfit' : 'Vazirmatn',
             },
           }));
-          showToast('✨ Subtitles automatically applied for video!');
+          showToast('✨ Subtitles automatically applied for full video duration!');
         }
       } catch (e) {
         // Keep baseline state with enabled: true
