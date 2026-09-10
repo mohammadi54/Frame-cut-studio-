@@ -1,0 +1,7 @@
+{
+  "name": "FrameCut Studio",
+  "description": "Professional video framing, Mohammadiacademy.org branding, and automated English and Persian subtitle generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
