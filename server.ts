@@ -1,31 +1,44 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+
+import { generateJSON, getAiStatus, initAi } from "./server/ai/orchestrator";
+import type { AiResult } from "./server/ai/orchestrator";
 
 dotenv.config();
 
+// Builds the provider chain once: Gemini primary, then the env-gated alternates
+// (OpenRouter / Groq / OpenAI / Anthropic). See server/ai/ for the policy.
+initAi(process.env);
+
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: "50mb" }));
 
-// Lazy Google Gen AI helper with required telemetry headers
-let aiClient: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY || "";
-    aiClient = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
-    });
+/**
+ * Response annotation helpers.
+ *
+ * `aiMeta` records which provider/model actually served a request so a silent
+ * failover is visible in the network tab and in server logs. The fields are
+ * additive; every existing response key (and the static `fallback: true`
+ * payloads below) is preserved exactly as before.
+ */
+function aiMeta(result: AiResult) {
+  return {
+    provider: result.provider,
+    model: result.model,
+    failover: result.usedFailover,
+  };
+}
+
+function withAiMeta(payload: any, result: AiResult) {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    return { ...payload, ...aiMeta(result) };
   }
-  return aiClient;
+  return payload;
 }
 
 // Health check
@@ -33,11 +46,20 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: Date.now() });
 });
 
+// AI provider / failover status. Reports the configured chain, cooldowns and
+// per-target counters. Never exposes API keys or request bodies.
+app.get("/api/ai/status", (req, res) => {
+  try {
+    res.json(getAiStatus());
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message || "Failed to read AI status" });
+  }
+});
+
 // AI Title Generator tailored for Mohammadi Academy
 app.post("/api/ai/title", async (req, res) => {
   try {
     const { topic, platform, currentTitle, mood, language } = req.body;
-    const ai = getAI();
     const langPrompt = language === 'fa' 
       ? 'Generate the titles in fluent, scholarly Persian (فارسی) suitable for Mohammadi Academy.'
       : language === 'bilingual'
@@ -56,16 +78,12 @@ Output strictly valid JSON with an array of objects:
 ]
 Keep each title concise (3 to 12 words), formatted for video header banners.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+    // Gemini first; transient Gemini failures (429/500/502/503/504/timeouts)
+    // automatically fail over to the configured alternate providers.
+    const result = await generateJSON({ label: "ai/title", prompt, defaultJson: "[]" });
 
-    const parsed = JSON.parse(response.text || "[]");
-    res.json({ titles: parsed });
+    const parsed = result.json;
+    res.json({ titles: parsed, ...aiMeta(result) });
   } catch (error: any) {
     console.error("AI Title error:", error);
     // Graceful fallback titles dedicated to Mohammadi Academy
@@ -87,7 +105,6 @@ Keep each title concise (3 to 12 words), formatted for video header banners.`;
 app.post("/api/ai/content-kit", async (req, res) => {
   try {
     const { title, platform, duration, summary } = req.body;
-    const ai = getAI();
 
     const prompt = `You are a social media copywriter for Mohammadi Academy (Mohammadiacademy.org).
 Generate an official posting kit for this video:
@@ -103,16 +120,10 @@ Produce JSON in this format:
   "hashtags": ["#MohammadiAcademy", "#آکادمی_محمدی", "#Mohammadiacademy_org", "#آموزش_اسلامی", "#حکمت_و_معرفت", "#IslamicStudies"]
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+    const result = await generateJSON({ label: "ai/content-kit", prompt, defaultJson: "{}" });
 
-    const parsed = JSON.parse(response.text || "{}");
-    res.json(parsed);
+    const parsed = result.json;
+    res.json(withAiMeta(parsed, result));
   } catch (error: any) {
     console.error("AI Content Kit error:", error);
     res.json({
@@ -128,7 +139,6 @@ Produce JSON in this format:
 app.post("/api/ai/subtitles", async (req, res) => {
   try {
     const { title, duration, transcriptDraft, language } = req.body;
-    const ai = getAI();
     const vidDuration = Math.max(3, Number(duration) || 15);
     const lang = language || 'fa';
     const estimatedCues = Math.max(3, Math.ceil(vidDuration / 3.2));
@@ -179,16 +189,10 @@ Rules:
 - Keep phrases concise (3 to 6 words per line).
 - Cues must be contiguous with natural pacing (each cue approx 2.5 to 3.8 seconds).`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+    const result = await generateJSON({ label: "ai/subtitles", prompt, defaultJson: "[]" });
 
-    const parsed = JSON.parse(response.text || "[]");
-    res.json({ subtitles: parsed });
+    const parsed = result.json;
+    res.json({ subtitles: parsed, ...aiMeta(result) });
   } catch (error: any) {
     console.error("AI Subtitles error:", error);
     const vidDuration = Math.max(3, Number(req.body.duration) || 15);
@@ -251,7 +255,6 @@ Rules:
 app.post("/api/ai/transcribe-video-audio", async (req, res) => {
   try {
     const { audioBase64, mimeType, language, duration, title } = req.body;
-    const ai = getAI();
     const vidDuration = Math.max(3, Number(duration) || 15);
     const lang = language || 'fa';
     const estimatedCues = Math.max(3, Math.ceil(vidDuration / 3.2));
@@ -297,39 +300,31 @@ JSON format:
   }
 ]`;
 
-    let response;
+    const hasAudio = Boolean(audioBase64 && audioBase64.length > 50);
+    const audioBufferClean = hasAudio
+      ? audioBase64.includes(",")
+        ? audioBase64.split(",")[1]
+        : audioBase64
+      : null;
 
-    if (audioBase64 && audioBase64.length > 50) {
-      const audioBufferClean = audioBase64.includes(",") ? audioBase64.split(",")[1] : audioBase64;
-      response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: [
-          {
-            inlineData: {
-              mimeType: mimeType || "audio/wav",
-              data: audioBufferClean,
-            },
-          },
-          {
-            text: systemPrompt,
-          },
-        ],
-        config: {
-          responseMimeType: "application/json",
-        },
-      });
-    } else {
-      response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: systemPrompt + `\nNo direct audio waveform available; generate authentic Mohammadi Academy lecture speech cues continuously covering the entire ${vidDuration}s duration.`,
-        config: {
-          responseMimeType: "application/json",
-        },
-      });
-    }
+    // Gemini still receives the inline audio waveform exactly as before. Audio
+    // requests only fail over to providers that accept inline audio (extra
+    // Gemini models, plus OpenAI when OPENAI_AUDIO_MODEL is configured);
+    // everything else keeps the original text-only prompt branch, and the
+    // static cue pool below remains the final safety net.
+    const result = await generateJSON({
+      label: "ai/transcribe-video-audio",
+      prompt: hasAudio
+        ? systemPrompt
+        : systemPrompt + `\nNo direct audio waveform available; generate authentic Mohammadi Academy lecture speech cues continuously covering the entire ${vidDuration}s duration.`,
+      audio: audioBufferClean
+        ? { mimeType: mimeType || "audio/wav", dataBase64: audioBufferClean }
+        : undefined,
+      defaultJson: "[]",
+    });
 
-    const parsed = JSON.parse(response.text || "[]");
-    res.json({ subtitles: parsed, success: true });
+    const parsed = result.json;
+    res.json({ subtitles: parsed, success: true, ...aiMeta(result) });
   } catch (error: any) {
     console.error("AI Audio Transcription error:", error);
     const vidDuration = Math.max(3, Number(req.body.duration) || 15);
@@ -394,7 +389,6 @@ JSON format:
 app.post("/api/ai/complete-subtitles", async (req, res) => {
   try {
     const { startTime, endTime, language, title, existingSubtitles } = req.body;
-    const ai = getAI();
     const start = Number(startTime) || 0;
     const end = Math.max(start + 1, Number(endTime) || (start + 10));
     const lang = language || 'fa';
@@ -426,16 +420,14 @@ Requirements:
   }
 ]`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
+    const result = await generateJSON({
+      label: "ai/complete-subtitles",
+      prompt,
+      defaultJson: "[]",
     });
 
-    const parsed = JSON.parse(response.text || "[]");
-    res.json({ subtitles: parsed, success: true });
+    const parsed = result.json;
+    res.json({ subtitles: parsed, success: true, ...aiMeta(result) });
   } catch (err: any) {
     console.error("Complete subtitles error:", err);
     res.status(500).json({ error: err.message || "Failed to complete subtitles" });
@@ -446,7 +438,6 @@ Requirements:
 app.post("/api/ai/translate-subtitles", async (req, res) => {
   try {
     const { subtitles, targetLanguage } = req.body;
-    const ai = getAI();
 
     const target = targetLanguage === 'Persian' || targetLanguage === 'fa' || targetLanguage === 'Farsi'
       ? 'Persian (فارسی)'
@@ -469,16 +460,14 @@ Output strictly valid JSON:
   { "id": "...", "start": 0.0, "end": 1.5, "text": "...", "highlight": "..." }
 ]`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
+    const result = await generateJSON({
+      label: "ai/translate-subtitles",
+      prompt,
+      defaultJson: "[]",
     });
 
-    const parsed = JSON.parse(response.text || "[]");
-    res.json({ subtitles: parsed });
+    const parsed = result.json;
+    res.json({ subtitles: parsed, ...aiMeta(result) });
   } catch (error: any) {
     console.error("AI Translation error:", error);
     res.status(500).json({ error: error.message || "Failed to translate subtitles" });
@@ -489,7 +478,6 @@ Output strictly valid JSON:
 app.post("/api/ai/smart-analysis", async (req, res) => {
   try {
     const { aspectCategory, videoWidth, videoHeight, duration, platform } = req.body;
-    const ai = getAI();
 
     const prompt = `You are an AI video editor recommending framing and cut settings.
 Video dimensions: ${videoWidth}x${videoHeight} (Aspect: ${aspectCategory})
@@ -507,16 +495,10 @@ Analyze and provide recommendations in JSON:
   "reasoning": "A concise explanation of why this framing maximizes engagement on this platform."
 }`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
+    const result = await generateJSON({ label: "ai/smart-analysis", prompt, defaultJson: "{}" });
 
-    const parsed = JSON.parse(response.text || "{}");
-    res.json(parsed);
+    const parsed = result.json;
+    res.json(withAiMeta(parsed, result));
   } catch (error: any) {
     console.error("AI Analysis error:", error);
     res.json({
@@ -534,9 +516,16 @@ Analyze and provide recommendations in JSON:
 
 // Vite middleware and static serving
 async function startServer() {
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        // Attach Vite's HMR websocket to this same HTTP server so hot reload
+        // also works behind single-port preview proxies.
+        hmr: process.env.DISABLE_HMR === "true" ? false : { server: httpServer },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -548,7 +537,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`FrameCut Studio server running on http://0.0.0.0:${PORT}`);
   });
 }
