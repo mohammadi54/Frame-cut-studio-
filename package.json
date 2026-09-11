@@ -9,7 +9,11 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test server/ai/__tests__/errors.test.ts server/ai/__tests__/json.test.ts server/ai/__tests__/orchestrator.test.ts",
+    "test:watch": "node --import tsx --test --watch server/ai/__tests__/",
+    "test:e2e": "node scripts/e2e-failover.mjs",
+    "mock:ai": "tsx scripts/mock-ai-server.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
