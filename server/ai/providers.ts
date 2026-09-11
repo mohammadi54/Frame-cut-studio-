@@ -73,15 +73,13 @@ export class GeminiProvider implements AiProvider {
   readonly id = 'gemini';
   readonly config: ProviderConfig;
   private client: GoogleGenAI | null = null;
-  private readonly audioModelOverride: string;
+  /** Optional SDK-level timeout; the orchestrator also arms an AbortSignal. */
+  private readonly timeoutMs?: number;
 
   constructor(config: ProviderConfig, options: { timeoutMs?: number } = {}) {
     this.config = config;
-    this.audioModelOverride = '';
     this.timeoutMs = options.timeoutMs;
   }
-
-  private timeoutMs?: number;
 
   private getClient(): GoogleGenAI {
     if (!this.client) {
@@ -98,10 +96,10 @@ export class GeminiProvider implements AiProvider {
     return this.client;
   }
 
-  modelsFor(capability: AiCapability): string[] {
-    if (!this.config.enabled) return [];
-    // Gemini handles inline audio natively on the same flash models.
-    return capability === 'audio' || capability === 'text' ? this.config.models : [];
+  modelsFor(_capability: AiCapability): string[] {
+    // Gemini handles inline audio natively on the same flash models, so the
+    // full cascade is available for text and audio requests alike.
+    return this.config.enabled ? this.config.models : [];
   }
 
   async generate(model: string, request: AiRequest, signal: AbortSignal): Promise<string> {

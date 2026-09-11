@@ -61,32 +61,6 @@ const DEFAULT_GEMINI_FALLBACKS = ['gemini-3.7-flash', 'gemini-3.5-flash', 'gemin
 
 export const DEFAULT_FALLBACK_ORDER = ['openrouter', 'groq', 'openai', 'anthropic'];
 
-function env(name: string): string {
-  const value = process.env[name];
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function envBool(name: string, fallback: boolean): boolean {
-  const raw = env(name).toLowerCase();
-  if (!raw) return fallback;
-  return ['1', 'true', 'yes', 'on'].includes(raw);
-}
-
-function envInt(name: string, fallback: number): number {
-  const parsed = Number.parseInt(env(name), 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-}
-
-function listFromEnv(name: string, fallback: string[]): string[] {
-  const raw = env(name);
-  if (!raw) return [...fallback];
-  const items = raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return items.length > 0 ? items : [...fallback];
-}
-
 function dedupe(items: string[]): string[] {
   return Array.from(new Set(items.filter(Boolean)));
 }
@@ -202,7 +176,7 @@ export function openAiAudioModel(fromEnv: NodeJS.ProcessEnv = process.env): stri
   return typeof value === 'string' ? value.trim() : '';
 }
 
-// Small helpers that accept an explicit env object (keeps loadAiConfig testable).
+// Helpers accept an explicit env object so loadAiConfig stays testable.
 function listFromEnvNames(envObj: NodeJS.ProcessEnv, name: string, fallback: string[]): string[] {
   const raw = typeof envObj[name] === 'string' ? (envObj[name] as string).trim() : '';
   if (!raw) return [...fallback];
@@ -245,6 +219,3 @@ export function describeConfig(config: AiConfig) {
   };
 }
 
-// Keep the unused-import linter quiet for the module level helpers above while
-// still exporting them for tests that want process.env semantics.
-export { env, envBool, envInt, listFromEnv };
